@@ -1,0 +1,113 @@
+---
+title: "Practical Machine Learning: Assignment"
+author: "Suhas Handa"
+date: "December 27, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har.
+
+### Summary of Data (as on provided weblink)
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience.
+
+### Reading Data
+```{r readingdata}
+setwd("C:\\Users\\ehansuh\\Desktop\\CourseEra\\7_Practical Machine Learning\\final assignment")
+training <- read.csv("./pml-training.csv",
+                     na.strings = c("NA","#DIV/0!",""," "))
+holdout <- read.csv("./pml-testing.csv",
+                    na.strings = c("NA","#DIV/0!",""," "))
+```
+
+### Basic Preprocessing
+* Partitioning into Training & Validation. Here I have used 80:20 Training to Validation split
+
+```{r partition, message=FALSE, warning=FALSE}
+library(caret)
+inTrain <- createDataPartition(y = training$classe,p = 0.8,list = FALSE)
+omittrain <- c("X","user_name")
+
+mytraining <- training[,!(names(training) %in% omittrain)]
+mytraining <- mytraining[inTrain,]
+myvalidation  <- mytraining[-inTrain,]
+
+omithold <- c("X","user_name","problem_id")
+holdout <- holdout[,!(names(holdout) %in% omithold)]
+holdout$classe <- 1 # added dummy variable for easy subsetting
+```
+
+* Checking & Removing Non-Zero Variance variables
+```{r nzv, message=FALSE, warning=FALSE}
+nearzero <- nearZeroVar(mytraining, saveMetrics = TRUE)
+mytraining <- mytraining[,!nearzero$nzv]
+dim(mytraining)
+```
+
+* Checking & Removing columns w > 60% missing values
+```{r missingvalues, message=FALSE, warning=FALSE}
+toberem <- sapply(colnames(mytraining), 
+                  function(x) ifelse(sum(is.na(mytraining[, x])) > 0.60*nrow(mytraining)
+                                     ,TRUE, FALSE))
+mytraining <- mytraining[,!toberem]
+dim(mytraining)
+```
+
+* Find correlation among variables
+```{r correlation, message=FALSE, warning=FALSE}
+mytraining$cvtd_timestamp <- as.Date(mytraining$cvtd_timestamp,"%d/%m/%Y")
+corrvar <- findCorrelation(cor(mytraining[, -c(3,57)]), cutoff=0.8)
+names(mytraining)[corrvar]
+```
+
+### Using Decision Tree and Random Forest
+```{r model, message=FALSE, warning=FALSE}
+# Preparing Validation Set using same operations
+myvalidation$cvtd_timestamp <- as.Date(myvalidation$cvtd_timestamp,"%d/%m/%Y")
+myvalidation <- myvalidation[,!nearzero$nzv]
+myvalidation <- myvalidation[,!toberem]
+
+tc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , 
+                   preProcOptions=list(thresh = 0.95), allowParallel=TRUE)
+
+modfitcv_rpart <- train(classe ~ ., preProcess = "pca",
+                     method = "rpart", trControl = tc, data = mytraining)
+predict_rpart <- predict(modfitcv_rpart,myvalidation)
+confusionMatrix(predict_rpart, myvalidation$classe)
+
+modfitcv_rf <- train(classe ~ ., preProcess = "pca",
+                        method = "rf", trControl = tc, data = mytraining)
+predict_rf <- predict(modfitcv_rf,myvalidation)
+confusionMatrix(predict_rf, myvalidation$classe)
+```
+As seen random forest outperforms on Validation set (out of sample error estimate) and is expected to perform better on test or hold out sample
+Seven fold cross validation helps in ruling out overfitting and pca in train control is used to make features uncorrelated so that we can run model based on each feature. I have used 95% variance threshold for PCA (reduces no. of features to 26 from 57)
+
+### Final Prediction on hold out set w Random Forest
+```{r holdout, message=FALSE, warning=FALSE}
+holdout$cvtd_timestamp <- as.Date(holdout$cvtd_timestamp,"%d/%m/%Y")
+holdout <- holdout[,!nearzero$nzv]
+holdout <- holdout[,!toberem]
+
+predict_rf_test <- predict(modfitcv_rf,holdout)
+```
+
+Function to generate text file for test prediction
+```{r finalprediction, message=FALSE, warning=FALSE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predict_rf_test)
+```
